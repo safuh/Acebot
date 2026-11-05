@@ -3,10 +3,26 @@ import pandas as pd
 from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 
-from config import SYMBOL, TIMEFRAME, N, POLL_INTERVAL, RSI_PERIOD
-from exchange import fetch_initial_history, update_latest_candle, get_timeframe_ms
-from features_updated import add_intraday_features
+from config import (
+    SYMBOL,
+    TIMEFRAME,
+    N,
+    POLL_INTERVAL,
+    RSI_PERIOD,
+    SWING_LEFT_BARS,
+    SWING_RIGHT_BARS,
+    RSI_WINDOW_BARS,
+    MIN_DIVERGENCE_LOOKBACK_DAYS,
+    MAX_DIVERGENCE_LOOKBACK_DAYS,
+)
+from exchange import (
+    fetch_initial_history,
+    update_latest_candle,
+    get_timeframe_ms,
+)
+from features_updated import add_intraday_features, drop_leading_partial_day
 from market_structure import MarketStructureEngine
+from swing_structure import SwingStructureEngine
 from visualization import build_market_figure_with_divergence
 
 
@@ -29,18 +45,31 @@ def get_closed_candles(frame: pd.DataFrame, timeframe_ms: int) -> pd.DataFrame:
 print("Connecting to exchange...")
 print("Loading historical candles...")
 
-# Fetch history once. RSI/features must be calculated before replay.
+timeframe_ms = int(get_timeframe_ms())
+
+# Calculate RSI before removing the leading partial day so its indicator
+# warm-up uses all fetched candles. Replay/chart data then begins at a
+# verified complete UTC day.
 df = fetch_initial_history().tail(N)
 df = add_intraday_features(df, rsi_period=RSI_PERIOD)
+df = drop_leading_partial_day(df, timeframe_ms)
 
-timeframe_ms = get_timeframe_ms()
+swing_engine = SwingStructureEngine(
+    left_bars=SWING_LEFT_BARS,
+    right_bars=SWING_RIGHT_BARS,
+    timeframe_ms=timeframe_ms,
+)
 engine = MarketStructureEngine(
-    rsi_window_bars=2,
-    timeframe_ms=int(timeframe_ms),
+    rsi_window_bars=RSI_WINDOW_BARS,
+    timeframe_ms=timeframe_ms,
+    min_reference_days=MIN_DIVERGENCE_LOOKBACK_DAYS,
+    max_reference_days=MAX_DIVERGENCE_LOOKBACK_DAYS,
 )
 
-# Replay every fully closed historical candle in chronological order.
-closed_df = get_closed_candles(df, int(timeframe_ms))
+# Replay historical candles through both engines in the same chronological
+# order. A swing is forwarded only when its right-hand confirmation bars
+# have closed; the market engine associates it with its actual pivot candle.
+closed_df = get_closed_candles(df, timeframe_ms)
 if closed_df.empty:
     raise RuntimeError(
         "No closed historical candles were selected. Check exchange timestamps "
@@ -48,10 +77,13 @@ if closed_df.empty:
     )
 
 for timestamp, candle in closed_df.iterrows():
-    engine.update(timestamp, candle)
+    swing_events = swing_engine.update(timestamp, candle)
+    engine.update(timestamp, candle, confirmed_swings=swing_events)
 
 events = engine.get_divergences()
+swing_snapshot = swing_engine.get_snapshot()
 print(f"Historical candles replayed: {len(closed_df)}")
+print(f"Confirmed swing points: {len(swing_snapshot['swings'])}")
 print(f"Historical divergence events: {len(events)}")
 
 for event in events:
@@ -66,6 +98,7 @@ for event in events:
 state = {
     "df": df,
     "engine": engine,
+    "swing_engine": swing_engine,
     "events": events,
 }
 
@@ -83,6 +116,7 @@ app.layout = html.Div(
                 SYMBOL,
                 TIMEFRAME,
                 daily=engine.get_daily_structure(),
+                swings=swing_snapshot,
             ),
             config={
                 "scrollZoom": True,
@@ -111,8 +145,9 @@ def refresh_market_chart(_n):
         updated = update_latest_candle(state["df"]).tail(N)
         updated = add_intraday_features(updated, rsi_period=RSI_PERIOD)
 
-        closed_df = get_closed_candles(updated, int(timeframe_ms))
+        closed_df = get_closed_candles(updated, timeframe_ms)
         engine = state["engine"]
+        swing_engine = state["swing_engine"]
 
         if engine.last_timestamp is None:
             new_candles = closed_df
@@ -120,10 +155,12 @@ def refresh_market_chart(_n):
             new_candles = closed_df.loc[closed_df.index > engine.last_timestamp]
 
         for timestamp, candle in new_candles.iterrows():
-            engine.update(timestamp, candle)
+            swing_events = swing_engine.update(timestamp, candle)
+            engine.update(timestamp, candle, confirmed_swings=swing_events)
 
         events = engine.get_divergences()
         daily = engine.get_daily_structure()
+        swing_snapshot = swing_engine.get_snapshot()
 
         state["df"] = updated
         state["events"] = events
@@ -134,6 +171,7 @@ def refresh_market_chart(_n):
             SYMBOL,
             TIMEFRAME,
             daily=daily,
+            swings=swing_snapshot,
         )
 
         latest = updated.iloc[-1]
@@ -143,6 +181,7 @@ def refresh_market_chart(_n):
             f"RSI: {latest['rsi']:.2f} | "
             f"Bars: {len(updated)} | "
             f"Closed replay bars: {len(closed_df)} | "
+            f"Swings: {len(swing_snapshot['swings'])} | "
             f"Divergences: {len(events)}"
         )
         return figure, status
@@ -154,6 +193,7 @@ def refresh_market_chart(_n):
             SYMBOL,
             TIMEFRAME,
             daily=state["engine"].get_daily_structure(),
+            swings=state["swing_engine"].get_snapshot(),
         )
         return figure, f"Network error: {error}"
 
@@ -164,6 +204,7 @@ def refresh_market_chart(_n):
             SYMBOL,
             TIMEFRAME,
             daily=state["engine"].get_daily_structure(),
+            swings=state["swing_engine"].get_snapshot(),
         )
         return figure, f"Exchange error: {error}"
 
@@ -174,6 +215,7 @@ def refresh_market_chart(_n):
             SYMBOL,
             TIMEFRAME,
             daily=state["engine"].get_daily_structure(),
+            swings=state["swing_engine"].get_snapshot(),
         )
         return figure, f"Market processing error: {error}"
 
