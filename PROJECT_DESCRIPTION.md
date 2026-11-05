@@ -8,18 +8,21 @@ The initial target is Binance Spot `BTC/USDT`, using one-hour candles and RSI(14
 
 ## Problem
 
-Historical intraday analysis can introduce look-ahead bias when an earlier candle is evaluated using the final high or low of its day. Acebot addresses this by replaying closed candles in order and maintaining the running daily high/low as each candle becomes available.
+Historical intraday analysis can introduce look-ahead bias when an earlier candle is evaluated using a final daily extreme before that extreme was confirmed. Acebot addresses this by replaying closed candles in order, confirming intraday swing pivots only after their right-hand bars close, and deriving each day's high/low from its confirmed swings. Swing windows cannot cross UTC midnight or candle-data gaps.
 
-The same stateful processing path is intended for historical replay and subsequent live updates.
+The first retained day must be a complete UTC day. The same swing and market-structure processing path is used for historical replay and subsequent live updates.
 
 ## Core capabilities
 
 - Historical and recent OHLCV retrieval through CCXT.
 - RSI and intraday feature calculation.
-- Stateful daily running highs and lows.
-- Completed daily liquidity reference levels.
+- Non-repainting intraday swing highs/lows with configurable left/right confirmation windows.
+- Daily high/low structure derived only from confirmed swing pivots.
+- Completed daily swing-liquidity reference levels.
+- Leading partial-day removal using exact expected UTC candle timestamps.
 - Hidden bearish and hidden bullish divergence detection.
-- Configurable RSI association window around the price-extreme candle.
+- Configurable RSI association window around the actual swing-pivot candle.
+- Divergence reference window of 2–21 calendar days; the immediately preceding day and references older than 21 days are excluded.
 - Historical event retention and later invalidation after reference-level sweeps.
 - Interactive price and RSI visualization.
 - Incremental live polling without duplicate candle processing.
@@ -34,7 +37,7 @@ The same stateful processing path is intended for historical replay and subseque
 
 **Configurability:** Market, timeframe, RSI period, RSI window radius, and polling interval are centralized.
 
-**Incremental operation:** New closed candles are processed once; the entire history should not be recalculated on every poll.
+**Incremental operation:** New closed candles are processed once by both engines; the entire history should not be replayed on every poll.
 
 **Observability:** Events should retain timestamps, reference/current values, direction, and lifecycle status.
 
