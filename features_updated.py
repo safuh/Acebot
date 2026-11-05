@@ -590,3 +590,58 @@ def add_swing_features(
 
     result.attrs["swing_snapshot"] = engine.get_snapshot()
     return result
+
+
+def drop_leading_partial_day(df, timeframe_ms):
+    """
+    Drop all rows before the first complete UTC day in an intraday frame.
+
+    A day is complete only when every expected candle opening timestamp is
+    present exactly once. The timeframe must divide 24 hours evenly.
+    RSI should be calculated before calling this helper so the retained
+    first day keeps its indicator warm-up from preceding candles.
+    """
+    if df.empty:
+        raise ValueError("Cannot find a complete day in an empty DataFrame.")
+
+    if not isinstance(timeframe_ms, int) or timeframe_ms <= 0:
+        raise ValueError("timeframe_ms must be a positive integer.")
+
+    day_ms = 24 * 60 * 60 * 1000
+    if day_ms % timeframe_ms:
+        raise ValueError(
+            "The timeframe must divide 24 hours evenly to validate full UTC days."
+        )
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise TypeError("DataFrame index must be a DatetimeIndex.")
+
+    frame = df.copy()
+    if frame.index.tz is None:
+        frame.index = frame.index.tz_localize("UTC")
+    else:
+        frame.index = frame.index.tz_convert("UTC")
+    frame = frame.sort_index()
+    frame = frame[~frame.index.duplicated(keep="last")]
+
+    candles_per_day = day_ms // timeframe_ms
+    frequency = pd.Timedelta(milliseconds=timeframe_ms)
+    days = frame.index.normalize().unique().sort_values()
+
+    for day in days:
+        expected = pd.date_range(
+            start=day,
+            periods=candles_per_day,
+            freq=frequency,
+        )
+        observed = frame.loc[
+            (frame.index >= day) & (frame.index < day + pd.Timedelta(days=1))
+        ].index
+
+        if observed.equals(expected):
+            return frame.loc[frame.index >= day].copy()
+
+    raise ValueError(
+        "No complete UTC day was found in the fetched history. "
+        "Increase N or verify exchange candle continuity."
+    )
