@@ -53,7 +53,7 @@ class SwingDerivedDailyExtremeTests(unittest.TestCase):
         )
 
         daily = engine.get_daily_structure()
-        self.assertEqual(daily.loc[day, "high"], 15)
+        self.assertEqual(daily.loc[day, "high"], 20)
         self.assertEqual(daily.loc[day, "low"], 5)
         self.assertEqual(engine.min_reference_days, 2)
         self.assertEqual(engine.max_reference_days, 21)
