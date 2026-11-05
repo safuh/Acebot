@@ -2,7 +2,7 @@
 
 Acebot is a modular Python cryptocurrency market-analysis application for monitoring daily market structure, liquidity levels, and hidden RSI divergences from intraday OHLCV data.
 
-**Initial baseline:** Binance Spot, `ETH/USDT`, 1-hour candles, RSI(14), UTC daily boundaries.
+**Initial baseline:** Binance Spot, `BTC/USDT`, 1-hour candles, RSI(14), UTC daily boundaries.
 
 > **Status:** The stateful market-structure engine has been implemented as a first development pass. End-to-end integration, comprehensive automated tests, persistence, and deployment still need to be completed. This is an analysis/monitoring project, not a production trading system.
 
@@ -93,7 +93,7 @@ Historical replay and live processing must use the same engine instance and `upd
 | Timeframe | `1h` |
 | RSI period | `14` |
 | RSI window radius | `2` candles |
-| Poll interval | `10` seconds |
+| Poll interval | `30` seconds |
 | Daily timezone | UTC |
 | Dashboard host | `127.0.0.1` |
 | Dashboard port | `8050` |
