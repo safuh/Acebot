@@ -58,6 +58,55 @@ class SwingDerivedDailyExtremeTests(unittest.TestCase):
         self.assertEqual(engine.min_reference_days, 2)
         self.assertEqual(engine.max_reference_days, 21)
 
+    def test_reference_window_is_two_through_twenty_one_calendar_days(self):
+        current_day = pd.Timestamp("2026-03-01 00:00:00", tz="UTC")
+
+        for days_back, should_detect in (
+            (1, False),
+            (2, True),
+            (21, True),
+            (22, False),
+        ):
+            with self.subTest(days_back=days_back):
+                engine = MarketStructureEngine(
+                    rsi_window_bars=0,
+                    timeframe_ms=3_600_000,
+                    min_reference_days=2,
+                    max_reference_days=21,
+                )
+                reference_day = current_day - pd.Timedelta(days=days_back)
+                reference_timestamp = reference_day + pd.Timedelta(hours=12)
+                current_timestamp = current_day + pd.Timedelta(hours=12)
+                engine.current_day = current_day
+                engine.levels = [{
+                    "day": reference_day,
+                    "high": 100.0,
+                    "low": 50.0,
+                    "high_swept_on": None,
+                    "low_swept_on": None,
+                    "rsi_near_high": 40.0,
+                    "rsi_near_low": 60.0,
+                    "high_timestamp": reference_timestamp,
+                    "low_timestamp": reference_timestamp,
+                    "rsi_near_high_timestamp": reference_timestamp,
+                    "rsi_near_low_timestamp": reference_timestamp,
+                }]
+
+                engine._detect_divergence(
+                    direction="bearish",
+                    candidate={
+                        "price": 90.0,
+                        "timestamp": current_timestamp,
+                    },
+                    rsi_extreme={
+                        "value": 50.0,
+                        "timestamp": current_timestamp,
+                    },
+                    detected_at=current_timestamp + pd.Timedelta(hours=1),
+                )
+
+                self.assertEqual(bool(engine.events), should_detect)
+
 
 if __name__ == "__main__":
     unittest.main()
