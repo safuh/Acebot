@@ -8,7 +8,7 @@ Your job is to advance the existing codebase carefully. Do not restart it, redes
 
 Acebot monitors cryptocurrency market structure and hidden RSI divergence. The initial baseline is Binance Spot `BTC/USDT`, one-hour OHLCV candles, UTC daily boundaries, and RSI(14).
 
-The central requirement is chronological correctness. Historical signals must be evaluated using the running daily high/low known at the time, never the final daily extreme if it had not yet occurred.
+The central requirement is chronological correctness. Daily extremes must come from confirmed intraday swing pivots, with no look-ahead across unclosed candles. Historical replay and live processing must use identical swing and market-engine update paths.
 
 ## 2. Inspect before changing
 
@@ -25,8 +25,9 @@ Do not claim to have inspected, run, tested, committed, or deployed anything unl
 
 - `config.py`: centralized settings.
 - `exchange.py`: CCXT setup, timeframe conversion, historical fetch, latest-candle update, cleanup.
-- `features.py`: RSI and intraday feature calculation.
-- `market_structure.py`: daily structure, liquidity levels, divergence events, lifecycle.
+- `features_updated.py`: RSI, intraday features, and complete-UTC-day validation.
+- `swing_structure.py`: non-repainting intraday pivots, BOS/CHoCH, and swing liquidity sweeps.
+- `market_structure.py`: swing-derived daily extremes, liquidity levels, divergence events, lifecycle.
 - `visualization.py`: Plotly charts and divergence annotations.
 - `main.py`: orchestration, replay, polling, Dash lifecycle.
 
@@ -37,33 +38,37 @@ Preserve the actual repository layout if it differs. Do not create duplicate mod
 Daily boundaries are UTC calendar days. Baseline timeframe is one hour.
 
 ### Hidden bearish
-- Reference a previous completed daily high.
-- The reference high must be unswept when the candidate is evaluated.
-- Current price high is lower than the reference high.
+- Reference a completed daily swing high from 2–21 calendar days before the current day.
+- The reference swing high must be unswept when the divergence is evaluated.
+- Current daily swing high is lower than the reference swing high.
 - Current associated RSI high is higher than the reference RSI high.
-- Current daily running high is greater than **all intervening completed daily highs** between reference day and current day.
+- Current daily swing high is greater than **all intervening available daily swing highs** between reference day and current day.
 
 ### Hidden bullish
-- Reference a previous completed daily low.
-- The reference low must be unswept when the candidate is evaluated.
-- Current price low is higher than the reference low.
+- Reference a completed daily swing low from 2–21 calendar days before the current day.
+- The reference swing low must be unswept when the divergence is evaluated.
+- Current daily swing low is higher than the reference swing low.
 - Current associated RSI low is lower than the reference RSI low.
-- Current daily running low is lower than **all intervening completed daily lows** between reference day and current day.
+- Current daily swing low is lower than **all intervening available daily swing lows** between reference day and current day.
+
+The immediately preceding day (one calendar day back) is excluded. Days older than 21 calendar days are excluded. Do not silently expand or contract this window.
 
 These strict intervening-extreme conditions are explicit requirements. Do not replace them with “no intervening level was swept.”
 
-### RSI association
-- Associate RSI with the candle establishing the running daily price extreme.
-- Use a configurable symmetric window around that candle.
-- Default radius: two candles on either side.
+### Swing and RSI association
+- Daily high/low candidates come only from confirmed swing-high/swing-low pivots produced by `SwingStructureEngine`.
+- Default pivot windows use two left bars and two right bars; comparisons are strict.
+- A pivot window must be contiguous and entirely within one UTC day. Never confirm a pivot using bars from two different days or across a data gap.
+- Choose the highest confirmed swing high and lowest confirmed swing low of each day.
+- If a day has no confirmed swing on one side, that side is unavailable; do not fall back to raw candle highs/lows.
+- Evaluate divergence only when the day is finalized, so a later confirmed higher/lower swing can replace an earlier candidate.
+- Associate RSI with the actual swing-pivot candle using a configurable symmetric window, default radius two.
 - High candidate selects maximum RSI; low candidate selects minimum RSI.
-- Do not use future candles before they close.
-- A newer daily extreme supersedes an unconfirmed candidate.
-- At day end, clip the RSI window to that day and finalize it.
+- Clip the RSI window to the same UTC day, including at day end.
 
 ### Sweeps and event lifecycle
-- A daily high is swept only when a later candle high is strictly greater.
-- A daily low is swept only when a later candle low is strictly lower.
+- A daily swing high is swept only when a later candle high is strictly greater.
+- A daily swing low is swept only when a later candle low is strictly lower.
 - A reference must be unswept at event detection.
 - Retain historical events. If the reference is swept later, mark the event invalidated and record the invalidation time; do not delete it.
 
@@ -108,10 +113,13 @@ Add or update tests for:
 - Timestamp normalization and validation.
 - Duplicate and out-of-order timestamps.
 - Day transitions and finalization.
-- Running high/low and candidate replacement.
-- RSI-window selection and confirmation timing.
+- Leading partial-day removal using exact expected UTC candle timestamps.
+- Same-day contiguous swing-pivot confirmation.
+- Swing-derived daily extreme selection and missing-side behavior.
+- RSI-window selection and day-end clipping.
 - Day-end window clipping.
 - Both divergence directions.
+- 2–21 calendar-day reference filtering (exclude day 1 and >21).
 - Unswept-reference filtering.
 - Strict intervening-extreme rules.
 - Later sweep invalidation and event retention.
