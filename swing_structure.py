@@ -111,6 +111,18 @@ class SwingStructureEngine:
 
         window = self.bars[-window_size:]
         pivot = window[self.left_bars]
+
+        # A swing window must be contiguous and entirely inside one UTC day.
+        # This prevents midnight-crossing pivots and pivots spanning data gaps.
+        pivot_day = pivot["timestamp"].normalize()
+        if any(item["timestamp"].normalize() != pivot_day for item in window):
+            return None
+        if any(
+            window[index]["timestamp"] - window[index - 1]["timestamp"]
+            != self.bar_duration
+            for index in range(1, len(window))
+        ):
+            return None
         others = window[:self.left_bars] + window[self.left_bars + 1:]
 
         is_high = all(pivot["high"] > item["high"] for item in others)
