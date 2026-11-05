@@ -144,6 +144,9 @@ def refresh_market_chart(_n):
     try:
         updated = update_latest_candle(state["df"]).tail(N)
         updated = add_intraday_features(updated, rsi_period=RSI_PERIOD)
+        # Keep the visible rolling frame aligned to a complete UTC day.
+        # The stateful engines remain independent of this chart-window trim.
+        updated = drop_leading_partial_day(updated, timeframe_ms)
 
         closed_df = get_closed_candles(updated, timeframe_ms)
         engine = state["engine"]
