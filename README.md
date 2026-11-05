@@ -66,9 +66,10 @@ This is the intended module layout, not a claim that every module is currently c
 ## Data flow
 
 ```text
-CCXT exchange -> OHLCV -> RSI/features -> closed-candle replay
-    -> MarketStructureEngine -> daily levels + divergence events
-    -> price/RSI visualization -> dashboard/live polling
+CCXT exchange -> OHLCV -> RSI/features -> complete-day filter
+    -> closed-candle replay -> SwingStructureEngine
+    -> MarketStructureEngine -> daily swing levels + divergence events
+    -> price/RSI visualization with swing overlays -> dashboard/live polling
 ```
 
 Historical replay and live processing must use the same engine instance and `update()` path.
@@ -156,7 +157,7 @@ Each candle must contain `high`, `low`, `close`, and `rsi`. The timestamp is the
 
 ## Testing priorities
 
-Test first-candle initialization, UTC handling, duplicate/out-of-order timestamps, day finalization, running extremes, RSI confirmation and clipping, both divergence directions, unswept references, intervening-extreme rules, sweep invalidation, event retention, and replay-to-live continuation.
+Test UTC handling, duplicate/out-of-order timestamps, complete-day filtering, same-day contiguous swing confirmation, swing-derived daily extremes, RSI window selection/clipping, 2–21-day reference filtering, both divergence directions, unswept references, intervening-extreme rules, sweep invalidation, event retention, and replay-to-live continuation.
 
 ## Limitations
 
