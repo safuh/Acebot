@@ -10,8 +10,10 @@ Acebot is a modular Python cryptocurrency market-analysis application for monito
 
 - Retrieve OHLCV data through CCXT.
 - Calculate RSI and intraday features.
-- Replay closed candles chronologically, reconstructing the running daily high/low as they were known at each candle close.
-- Track completed daily highs/lows as liquidity reference levels.
+- Replay closed candles chronologically through a non-repainting swing engine.
+- Derive each UTC day's high/low only from confirmed intraday swing highs/lows; a side with no confirmed swing remains unavailable rather than falling back to raw candle extremes.
+- Track completed swing-derived daily extremes as liquidity reference levels.
+- Drop leading history until the first complete UTC day, validating expected candle timestamps and continuity.
 - Detect hidden bearish and hidden bullish RSI divergence.
 - Retain historical events and mark them invalidated if their reference liquidity is swept later.
 - Plot historical divergence on both price and RSI charts.
@@ -20,21 +22,26 @@ Acebot is a modular Python cryptocurrency market-analysis application for monito
 ## Signal rules
 
 ### Hidden bearish
-A candidate requires an unswept previous completed daily high, a lower current price high, a higher associated RSI high, and a current daily high greater than **all intervening completed daily highs**.
+A candidate requires an unswept previous completed daily swing high, a lower current swing high, a higher associated RSI high, and a current daily swing high greater than **all intervening available daily swing highs**.
 
 ### Hidden bullish
-A candidate requires an unswept previous completed daily low, a higher current price low, a lower associated RSI low, and a current daily low lower than **all intervening completed daily lows**.
+A candidate requires an unswept previous completed daily swing low, a higher current swing low, a lower associated RSI low, and a current daily swing low lower than **all intervening available daily swing lows**.
 
 The strict intervening-extreme conditions are intentional project requirements. Do not reinterpret them as a generic “no intervening level swept” rule.
 
-### RSI association
-The RSI value is selected from a configurable symmetric window around the candle establishing the daily price extreme:
+### Swing and RSI association
+Daily extremes are selected from confirmed intraday swing pivots. Swing pivots use strict left/right comparisons (default two bars on each side), and their complete pivot window must be contiguous and remain within one UTC day. Divergence is evaluated only when the day is finalized, so a later higher/lower confirmed swing can replace an earlier candidate.
+
+The RSI value is selected from a configurable symmetric window around the actual swing-pivot candle:
 - High: maximum RSI in the window.
 - Low: minimum RSI in the window.
 - Default radius: two candles on either side.
-- Candidates wait for the required subsequent candles to close.
-- At day end, the window is clipped to that day.
-- A newer price extreme replaces an unconfirmed candidate.
+- The pivot is not available until its right-hand confirmation candles have closed.
+- At day end, the RSI window is clipped to that day.
+- The selected daily high/low is the highest/lowest confirmed swing of that day.
+
+### Reference window
+Only completed reference days **2 through 21 calendar days** before the current day are eligible. The immediately preceding day is deliberately excluded; days older than 21 are ignored.
 
 Only closed candles are committed to the engine. The latest day remains developing until a candle from the next UTC day triggers finalization.
 
@@ -46,7 +53,8 @@ Acebot/
 ├── config.py               # Centralized settings
 ├── exchange.py             # CCXT initialization and OHLCV access
 ├── features.py              # RSI and intraday features
-├── market_structure.py     # Daily structure and divergence engine
+├── swing_structure.py      # Non-repainting intraday swings, BOS/CHoCH, sweeps
+├── market_structure.py     # Swing-derived daily structure and divergence engine
 ├── visualization.py        # Plotly price/RSI charts
 ├── tests/                   # Automated tests
 ├── requirements.txt
@@ -152,7 +160,7 @@ Test first-candle initialization, UTC handling, duplicate/out-of-order timestamp
 
 ## Limitations
 
-Exchange data may be delayed, incomplete, revised, or unavailable. Candle-close polling does not capture every intrabar movement. Technical-analysis events are not guaranteed trading signals or financial advice. Validate calculations and data quality before relying on outputs.
+Exchange data may be delayed, incomplete, revised, or unavailable. The first retained UTC day is validated as complete; subsequent data gaps can still affect swing confirmation. Candle-close polling does not capture every intrabar movement. Technical-analysis events are not guaranteed trading signals or financial advice. Validate calculations and data quality before relying on outputs.
 
 ## Documentation
 
