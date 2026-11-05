@@ -15,10 +15,11 @@ class MarketStructureEngine:
     completed candles, in chronological order. Timestamps are normalized
     to UTC and daily boundaries are UTC calendar days.
 
-    A daily high/low is treated as a running extreme while the day develops.
-    When a new extreme is made, its pending RSI candidate replaces the
-    previous pending candidate. The candidate is confirmed only after the
-    configured number of subsequent candles have closed.
+    Daily highs/lows are selected only from confirmed intraday swing
+    pivots delivered by SwingStructureEngine. The highest confirmed swing
+    high and lowest confirmed swing low become the day's candidates.
+    Divergence is evaluated when the day is finalized, after all eligible
+    swings for that day are known.
 
     RSI association:
       * bearish/high candidate: maximum RSI in the symmetric window
@@ -97,6 +98,9 @@ class MarketStructureEngine:
             Candle opening timestamp. Naive timestamps are interpreted as UTC.
         candle:
             Mapping/Series containing high, low, close and rsi.
+        confirmed_swings:
+            Newly confirmed swing events returned by SwingStructureEngine.update().
+            Only swing_high and swing_low events are used as daily candidates.
 
         Returns
         -------
