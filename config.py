@@ -49,3 +49,17 @@ EXCHANGE_OPTIONS = {
 DASH_HOST = "127.0.0.1"
 DASH_PORT = 8050
 DASH_DEBUG = False
+
+
+# ==========================================
+# MARKET STRUCTURE CONFIGURATION
+# ==========================================
+
+SWING_LEFT_BARS = 2
+SWING_RIGHT_BARS = 2
+RSI_WINDOW_BARS = 2
+
+# Reference days are calendar days before the current day.
+# A one-day gap is excluded; eligible references are 2 through 21 days back.
+MIN_DIVERGENCE_LOOKBACK_DAYS = 2
+MAX_DIVERGENCE_LOOKBACK_DAYS = 21
