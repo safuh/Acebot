@@ -45,15 +45,23 @@ class MarketStructureEngine:
         self,
         rsi_window_bars: int = 2,
         timeframe_ms: int = 3_600_000,
+        min_reference_days: int = 2,
+        max_reference_days: int = 21,
     ) -> None:
         if not isinstance(rsi_window_bars, int) or rsi_window_bars < 0:
             raise ValueError("rsi_window_bars must be a non-negative integer.")
 
         if not isinstance(timeframe_ms, int) or timeframe_ms <= 0:
             raise ValueError("timeframe_ms must be a positive integer.")
+        if not isinstance(min_reference_days, int) or min_reference_days < 1:
+            raise ValueError("min_reference_days must be an integer >= 1.")
+        if not isinstance(max_reference_days, int) or max_reference_days < min_reference_days:
+            raise ValueError("max_reference_days must be >= min_reference_days.")
 
         self.rsi_window_bars = rsi_window_bars
         self.timeframe_ms = timeframe_ms
+        self.min_reference_days = min_reference_days
+        self.max_reference_days = max_reference_days
         self.bar_duration = pd.Timedelta(milliseconds=timeframe_ms)
 
         # These are intentionally None until the first valid candle arrives.
@@ -78,6 +86,7 @@ class MarketStructureEngine:
         self,
         timestamp: Any,
         candle: dict[str, Any] | pd.Series,
+        confirmed_swings: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Commit one completed candle to the engine.
@@ -140,29 +149,46 @@ class MarketStructureEngine:
             "rsi": row["rsi"],
         })
 
-        position = len(state["candles"]) - 1
+        # Daily extremes come only from confirmed intraday swing pivots.
+        # The swing event is delivered on its confirmation candle, while its
+        # timestamp identifies the actual pivot candle.
+        positions = {
+            item["timestamp"]: index
+            for index, item in enumerate(state["candles"])
+        }
+        for swing in confirmed_swings or []:
+            event_type = swing.get("event_type")
+            if event_type not in {"swing_high", "swing_low"}:
+                continue
 
-        # Update the running daily high and replace its pending candidate
-        # whenever a strictly higher high is printed.
-        if state["high"] is None or row["high"] > state["high"]:
-            state["high"] = row["high"]
-            state["high_candidate"] = {
-                "position": position,
-                "timestamp": timestamp,
-                "price": row["high"],
-                "confirmed": False,
-            }
+            swing_timestamp = self._normalize_timestamp(swing["timestamp"])
+            position = positions.get(swing_timestamp)
+            if position is None:
+                continue
 
-        # Update the running daily low and replace its pending candidate
-        # whenever a strictly lower low is printed.
-        if state["low"] is None or row["low"] < state["low"]:
-            state["low"] = row["low"]
-            state["low_candidate"] = {
-                "position": position,
-                "timestamp": timestamp,
-                "price": row["low"],
-                "confirmed": False,
-            }
+            price = self._to_float(swing["price"], "swing price")
+            if event_type == "swing_high":
+                if state["high"] is None or price > state["high"]:
+                    state["high"] = price
+                    state["high_candidate"] = {
+                        "position": position,
+                        "timestamp": swing_timestamp,
+                        "price": price,
+                        "confirmed": False,
+                        "swing_id": swing.get("swing_id"),
+                        "confirmed_at": swing.get("confirmed_at"),
+                    }
+            else:
+                if state["low"] is None or price < state["low"]:
+                    state["low"] = price
+                    state["low_candidate"] = {
+                        "position": position,
+                        "timestamp": swing_timestamp,
+                        "price": price,
+                        "confirmed": False,
+                        "swing_id": swing.get("swing_id"),
+                        "confirmed_at": swing.get("confirmed_at"),
+                    }
 
         # Process sweeps before testing new divergence candidates. A level
         # swept on this candle is therefore unavailable as a reference.
@@ -171,9 +197,9 @@ class MarketStructureEngine:
         # A later sweep can invalidate an event already in the event log.
         self._update_event_status(row["timestamp"] + self.bar_duration)
 
-        # Confirm candidates only when their complete right-hand RSI window
-        # is available from candles that have already closed.
-        self._confirm_ready_candidates(row["timestamp"])
+        # Divergence is evaluated once at day finalization, after all
+        # confirmed swings for that day are known. This prevents an early
+        # lower swing from being mistaken for the day's final extreme.
 
         self.last_timestamp = timestamp
 
@@ -537,17 +563,19 @@ class MarketStructureEngine:
 
         # Only completed daily levels before the current day can be
         # reference levels.
-        previous_levels = [
-            level for level in self.levels
-            if level["day"] < day
-        ]
+        previous_levels = []
+        for level in self.levels:
+            reference_day = level["day"]
+            days_back = (day - reference_day).days
+            if self.min_reference_days <= days_back <= self.max_reference_days:
+                previous_levels.append(level)
 
         for reference in previous_levels:
             reference_day = reference["day"]
 
             if direction == "bearish":
-                # The reference daily high must remain unswept.
-                if reference["high_swept_on"] is not None:
+                # The reference swing high must exist and remain unswept.
+                if reference["high"] is None or reference["high_swept_on"] is not None:
                     continue
 
                 if pd.isna(reference["rsi_near_high"]):
@@ -566,6 +594,7 @@ class MarketStructureEngine:
                     level["high"]
                     for level in self.levels
                     if reference_day < level["day"] < day
+                    and level["high"] is not None
                 ]
                 if intervening and not price > max(intervening):
                     continue
@@ -578,8 +607,8 @@ class MarketStructureEngine:
                 ]
 
             elif direction == "bullish":
-                # The reference daily low must remain unswept.
-                if reference["low_swept_on"] is not None:
+                # The reference swing low must exist and remain unswept.
+                if reference["low"] is None or reference["low_swept_on"] is not None:
                     continue
 
                 if pd.isna(reference["rsi_near_low"]):
@@ -598,6 +627,7 @@ class MarketStructureEngine:
                     level["low"]
                     for level in self.levels
                     if reference_day < level["day"] < day
+                    and level["low"] is not None
                 ]
                 if intervening and not price < min(intervening):
                     continue
@@ -669,13 +699,15 @@ class MarketStructureEngine:
 
         for level in self.levels:
             if (
-                level["high_swept_on"] is None
+                level["high"] is not None
+                and level["high_swept_on"] is None
                 and candle["high"] > level["high"]
             ):
                 level["high_swept_on"] = sweep_time
 
             if (
-                level["low_swept_on"] is None
+                level["low"] is not None
+                and level["low_swept_on"] is None
                 and candle["low"] < level["low"]
             ):
                 level["low_swept_on"] = sweep_time
@@ -728,45 +760,46 @@ class MarketStructureEngine:
         high_candidate = state["high_candidate"]
         low_candidate = state["low_candidate"]
 
-        if high_candidate is None or low_candidate is None:
-            raise RuntimeError(
-                f"Incomplete daily extremes for {self.current_day!r}."
-            )
-
         last_timestamp = state["candles"][-1]["timestamp"]
 
         # At day close, finalize candidates using the available part of
         # their RSI windows, clipped to candles belonging to this day.
-        self._confirm_candidate(
-            direction="bearish",
-            timestamp=last_timestamp,
-            allow_partial=True,
-        )
-        self._confirm_candidate(
-            direction="bullish",
-            timestamp=last_timestamp,
-            allow_partial=True,
-        )
+        if high_candidate is not None:
+            self._confirm_candidate(
+                direction="bearish",
+                timestamp=last_timestamp,
+                allow_partial=True,
+            )
+        if low_candidate is not None:
+            self._confirm_candidate(
+                direction="bullish",
+                timestamp=last_timestamp,
+                allow_partial=True,
+            )
 
         high_rsi = self._get_rsi_extreme(
             state=state,
             candidate=high_candidate,
             direction="bearish",
             allow_partial=True,
-        )
+        ) if high_candidate is not None else None
         low_rsi = self._get_rsi_extreme(
             state=state,
             candidate=low_candidate,
             direction="bullish",
             allow_partial=True,
-        )
+        ) if low_candidate is not None else None
 
         level = {
             "day": self.current_day,
             "high": state["high"],
             "low": state["low"],
-            "high_timestamp": high_candidate["timestamp"],
-            "low_timestamp": low_candidate["timestamp"],
+            "high_timestamp": (
+                high_candidate["timestamp"] if high_candidate is not None else pd.NaT
+            ),
+            "low_timestamp": (
+                low_candidate["timestamp"] if low_candidate is not None else pd.NaT
+            ),
             "rsi_near_high": (
                 high_rsi["value"] if high_rsi is not None else float("nan")
             ),
